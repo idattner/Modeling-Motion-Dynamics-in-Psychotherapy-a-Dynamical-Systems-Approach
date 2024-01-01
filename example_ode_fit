@@ -1,0 +1,186 @@
+# Clear workspace
+rm(list = ls())
+
+# Load required libraries
+library(dplyr)    # For data manipulation
+library(simode)   # For simulating ODE models
+library(ggplot2)  # For data visualization
+library(reshape2) # For reshaping data
+library(tidyr)    # For tidying data
+
+# Set seed for reproducibility
+set.seed(123)
+
+# Define constants for the ODE model
+pars <- c('alpha', 'beta', 'gamma', 'delta')
+vars <- c('X', 'Y')
+eq_X <- 'alpha*X + beta*Y'
+eq_Y <- 'gamma*X + delta*Y'
+equations <- c(eq_X, eq_Y)
+names(equations) <- vars
+
+# Time interval and segmentation parameters
+I <- 10                                # Number of segments
+ind <- 15001:82500                     # Time indices for a 45-minute interval starting from 10 minutes
+N <- length(ind)                       # Total number of video frames in the interval
+nseg <- round(N / I)                   # Number of video frames in each segment
+segments <- seq(1, 70000, nseg)        # Defining the segments for analysis
+
+# Define column names for results data frame
+columns <- c("pid", "thType", "gender", "stat", "statG",
+             "alpha", "beta", "gamma", "delta",
+             "th_self", "th_out", "pa_out", "pa_self",
+             "eig1", "eig2", "x0", "y0",
+             "msev", "mseu")
+
+DF <- 7  # Smoothing factor for data
+
+# Get list of all text files in the directory
+listcsv <- dir(pattern = "*.txt")
+
+# Initialize data frame for all files
+dfall <- data.frame(matrix(nrow = length(listcsv), ncol = length(columns)))
+colnames(dfall) <- columns
+
+# Load data from files
+d0 <- read.csv(listcsv, header = FALSE, sep = "")
+
+# Extract metadata from filenames
+dfall$pid <- as.numeric(substr(listcsv, 1, 6))
+dfall$thType <- substr(listcsv, 11, 13)
+dfall$gender <- substr(listcsv, 15, 16)
+dfall$stat <- substr(listcsv, 22, 25)
+dfall$statG <- substr(listcsv, 27, 29)
+
+# Select relevant data rows for the specified interval
+d1 <- d0[ind,]  # Data for the selected 45-minute interval
+th <- d1$V4     # Therapist head ROI
+pa <- d1$V3     # Patient head ROI
+
+# Generate data for the defined segments
+phb <- data.frame(pa = pa, th = th)
+phbna <- na.omit(phb)
+segment_columns <- c("seg", "spa", "sth")
+dfag <- data.frame(matrix(nrow = I, ncol = length(segment_columns)))
+colnames(dfag) <- segment_columns
+
+# Process each segment
+for (i in 1:I) {
+  # Define indices for the current segment
+  id1 <- seq(segments[i], segments[i+1] - 1)
+  
+  # Create a dataframe for the current segment and omit missing values
+  phb <- data.frame(pa_seg = pa[id1], th_seg = th[id1])
+  phbna <- na.omit(phb)
+  
+  # Skip the segment if no therapist head data is available
+  if (length(phbna$th) == 0) { next }
+  
+  # Calculate mean values for patient and therapist in the segment
+  dfag$seg[i] <- i
+  dfag$spa[i] <- mean(phbna$pa_seg)
+  dfag$sth[i] <- mean(phbna$th_seg)
+}
+
+# Normalize the segment data
+dfag$sth <- (dfag$sth - mean(dfag$sth)) / sd(dfag$sth)
+dfag$spa <- (dfag$spa - mean(dfag$spa)) / sd(dfag$spa)
+
+# Time vector for ODE model
+time <- 1:I
+
+# Smooth the data using spline interpolation
+v <- smooth.spline(time, dfag$sth, df = DF)
+u <- smooth.spline(time, dfag$spa, df = DF)
+v1 <- v$y
+u1 <- u$y
+
+# Set initial conditions for the ODE model
+x0 <- c(v1[1], u1[1])
+names(x0) <- vars
+
+# Prepare observations for ODE estimation
+obs <- list(v1, u1)
+names(obs) <- vars
+
+# Estimate ODE model parameters
+ode_est <- simode(equations = equations, pars = c(pars, vars), time = time * 4.5, obs = obs)
+
+# Extract estimated parameters and update dfall
+dfall$alpha <- ode_est$nls_pars_est[1]
+dfall$beta <- ode_est$nls_pars_est[2]
+dfall$gamma <- ode_est$nls_pars_est[3]
+dfall$delta <- ode_est$nls_pars_est[4]
+dfall$x0 <- ode_est$nls_pars_est[5]
+dfall$y0 <- ode_est$nls_pars_est[6]
+
+# Update initial conditions and parameters for model simulation
+x0 <- c(dfall$x0, dfall$y0)
+names(x0) <- vars
+theta <- c(dfall$alpha, dfall$beta, dfall$gamma, dfall$delta)
+names(theta) <- pars
+
+# Simulate the ODE model
+model <- solve_ode(equations, theta, x0, time)
+x <- model[, vars]
+
+# Calculate mean squared errors for the model
+dfall$msev <- mean((v1 - x[, 1])^2)
+dfall$mseu <- mean((u1 - x[, 2])^2)
+# Eigenvalue Analysis
+# Construct a matrix from the ODE model parameters
+A <- matrix(c(theta[1], theta[2], theta[3], theta[4]), nrow = 2)
+
+# Compute eigenvalues of the matrix
+eigenvalues <- eigen(A)$values
+dfall$eig1 <- eigenvalues[1]  # First eigenvalue
+dfall$eig2 <- eigenvalues[2]  # Second eigenvalue
+
+# Calculate the relative importance of each parameter
+# This helps in understanding the influence of each parameter in the model
+dfall$th_self <- abs(theta[1]) / sum(abs(theta))  # Therapist's influence on self
+dfall$th_out <- abs(theta[2]) / sum(abs(theta))   # Therapist's influence on patient
+dfall$pa_out <- abs(theta[3]) / sum(abs(theta))   # Patient's influence on therapist
+dfall$pa_self <- abs(theta[4]) / sum(abs(theta))  # Patient's influence on self
+
+  
+# Create a vector of minute values
+minutes <- 4.5 + (1:N) / 1687
+
+# Define time vectors for ODE solution
+time1 <- seq(1, I, length.out = 100) * 4.5
+time2 <- seq(1, I, length.out = I) * 4.5
+
+# Solve the ODE model for defined times
+model <- solve_ode(equations, theta, x0, time1)
+x <- model[, vars]
+
+# Prepare data frames for plotting
+# me1 contains model-generated data
+me1 <- data.frame(Minutes = time1, Therapist = x[, 1], Patient = x[, 2], DataType = "Model fit")
+# me2 contains aggregated motion energy data
+me2 <- data.frame(Minutes = time2, Therapist = dfag$sth, Patient = dfag$spa, DataType = "Aggregated motion energy")
+
+# Combine the two data frames for plotting
+me_combined <- rbind(me1, me2)
+
+# Separate data frames for Therapist and Patient for clearer plotting
+me_therapist <- data.frame(Minutes = me_combined$Minutes, Value = me_combined$Therapist, Role = "Therapist", DataType = me_combined$DataType)
+me_patient <- data.frame(Minutes = me_combined$Minutes, Value = me_combined$Patient, Role = "Patient", DataType = me_combined$DataType)
+
+# Combine the therapist and patient data frames
+me <- rbind(me_therapist, me_patient)
+
+# Plot the data
+p <- ggplot(me, aes(x = Minutes, y = Value, color = DataType)) +
+  geom_line(data = subset(me, DataType == "Model fit")) +
+  geom_point(data = subset(me, DataType == "Aggregated motion energy"), size = 3) +
+  scale_color_manual(values = c("Model fit" = "blue", "Aggregated motion energy" = "red")) +
+  facet_grid(rows = vars(Role)) +
+  ggtitle(paste("PID", dfall$pid, sep = "")) +
+  theme_minimal()
+print(p)
+
+# Save results to a CSV file
+write.csv(dfall, "results.csv")
+
