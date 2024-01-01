@@ -36,6 +36,7 @@ columns <- c("pid", "thType", "gender", "stat", "statG",
 DF <- 7  # Smoothing factor for data
 
 # Get list of all text files in the directory
+# Save in your folder the dataset file 117105_01_thX_mm_mmatch_dout_out.txt
 listcsv <- dir(pattern = "*.txt")
 
 # Initialize data frame for all files
