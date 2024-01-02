@@ -33,10 +33,8 @@ columns <- c("pid", "thType", "gender", "stat", "statG",
              "eig1", "eig2", "x0", "y0",
              "msev", "mseu")
 
-DF <- 7  # Smoothing factor for data
 
 # Get list of all text files in the directory
-# Save in your folder the dataset file 117105_01_thX_mm_mmatch_dout_out.txt
 listcsv <- dir(pattern = "*.txt")
 
 # Initialize data frame for all files
@@ -90,11 +88,8 @@ dfag$spa <- (dfag$spa - mean(dfag$spa)) / sd(dfag$spa)
 # Time vector for ODE model
 time <- 1:I
 
-# Smooth the data using spline interpolation
-v <- smooth.spline(time, dfag$sth, df = DF)
-u <- smooth.spline(time, dfag$spa, df = DF)
-v1 <- v$y
-u1 <- u$y
+v1 <- dfag$sth#v$y
+u1 <- dfag$spa#u$y
 
 # Set initial conditions for the ODE model
 x0 <- c(v1[1], u1[1])
@@ -105,7 +100,7 @@ obs <- list(v1, u1)
 names(obs) <- vars
 
 # Estimate ODE model parameters
-ode_est <- simode(equations = equations, pars = c(pars, vars), time = time * 4.5, obs = obs)
+ode_est <- simode(equations = equations, pars = c(pars, vars), time = time * 4.5, obs = obs,simode_ctrl=simode.control(im_smoothing = c("kernel")))
 
 # Extract estimated parameters and update dfall
 dfall$alpha <- ode_est$nls_pars_est[1]
@@ -173,15 +168,16 @@ me_patient <- data.frame(Minutes = me_combined$Minutes, Value = me_combined$Pati
 me <- rbind(me_therapist, me_patient)
 
 # Plot the data
-p <- ggplot(me, aes(x = Minutes, y = Value, color = DataType)) +
-  geom_line(data = subset(me, DataType == "Model fit")) +
-  geom_point(data = subset(me, DataType == "Aggregated motion energy"), size = 3) +
-  scale_color_manual(values = c("Model fit" = "blue", "Aggregated motion energy" = "red")) +
-  facet_grid(rows = vars(Role)) +
+p <- ggplot(me, aes(x = Minutes, y = Value)) +
+  geom_line(data = subset(me, DataType == "Model fit"), aes(color = Role, linetype = Role)) +  # Different line colors and types for Therapist and Patient in model fit
+  geom_point(data = subset(me, DataType == "Aggregated motion energy"), aes(color = Role, shape = Role), size = 3) +  # Different point colors and shapes for Therapist and Patient in observations
+  scale_color_manual(values = c("Therapist" = "blue", "Patient" = "red")) +
+  scale_linetype_manual(values = c("Therapist" = "solid", "Patient" = "dashed")) +
+  scale_shape_manual(values = c("Therapist" = 17, "Patient" = 19)) +  # Different shapes for Therapist and Patient
   ggtitle(paste("PID", dfall$pid, sep = "")) +
-  theme_minimal()
+  theme_minimal() +
+  labs(shape = "Role", linetype = "Role", color = "Role")
 print(p)
 
 # Save results to a CSV file
 write.csv(dfall, "results.csv")
-
