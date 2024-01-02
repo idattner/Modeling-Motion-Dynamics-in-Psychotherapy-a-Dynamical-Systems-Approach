@@ -88,8 +88,8 @@ dfag$spa <- (dfag$spa - mean(dfag$spa)) / sd(dfag$spa)
 # Time vector for ODE model
 time <- 1:I
 
-v1 <- dfag$sth#v$y
-u1 <- dfag$spa#u$y
+v1 <- dfag$sth
+u1 <- dfag$spa
 
 # Set initial conditions for the ODE model
 x0 <- c(v1[1], u1[1])
